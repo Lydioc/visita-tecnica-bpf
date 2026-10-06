@@ -222,9 +222,6 @@ $('#lb').onclick=closeLB;
 /* ============ Voz (Web Speech API) ============ */
 let recog=null, micActive=null; // micActive = {id, btn}
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-function appendText(id,txt){const d=item(id);const ta=document.querySelector(`textarea[data-id="${id}"]`);
-  const base=d.text; d.text=base?(base+(/\s$/.test(base)||/^\s/.test(txt)?'':' ')+txt):txt.replace(/^\s+/,'');
-  if(ta)ta.value=d.text;save();markDone(id)}
 function setPartial(id,t){const p=document.querySelector(`[data-partial="${id}"]`);if(p)p.textContent=t}
 function stopMic(){
   if(!micActive)return;const m=micActive;micActive=null;
@@ -236,8 +233,28 @@ function toggleMic(id,btn){
   if(!SR){toast('Use o microfone do teclado do celular para ditar.');return}
   recog=new SR();recog.lang='pt-BR';recog.continuous=true;recog.interimResults=true;
   micActive={id,btn};btn.classList.add('rec');
-  recog.onresult=ev=>{let fin='',part='';for(let i=ev.resultIndex;i<ev.results.length;i++){const r=ev.results[i];if(r.isFinal)fin+=r[0].transcript;else part+=r[0].transcript}
-    if(fin)appendText(id,fin.trim());setPartial(id,part)};
+  // O Chrome/Android reenvia resultados já finalizados (e às vezes repete a frase crescendo), então
+  // nada é "anexado" a cada evento: recalculamos o ditado inteiro a partir de ev.results e
+  // regravamos base + ditado, o que é idempotente.
+  let base=item(id).text, wrote=base, lastCount=0, skip=0;
+  recog.onresult=ev=>{
+    const segs=[];let part='';
+    for(let i=0;i<ev.results.length;i++){
+      const r=ev.results[i],t=r[0].transcript.trim();
+      if(!r.isFinal){if(t)part+=(part?' ':'')+t;continue}
+      if(!t)continue;
+      const last=segs.length?segs[segs.length-1]:'',tl=t.toLowerCase(),ll=last.toLowerCase();
+      if(last&&tl.startsWith(ll))segs[segs.length-1]=t;      // repetição que só estende a anterior
+      else if(last&&ll.startsWith(tl))continue;              // repetição mais curta
+      else segs.push(t);
+    }
+    const d=item(id);
+    if(d.text!==wrote){base=d.text;skip=lastCount}           // a pessoa editou o campo durante o ditado
+    const dictated=segs.slice(skip).join(' ');
+    d.text=dictated?(base&&!/\s$/.test(base)?base+' ':base)+dictated:base;
+    wrote=d.text;lastCount=segs.length;
+    const ta=document.querySelector(`textarea[data-id="${id}"]`);if(ta)ta.value=d.text;
+    save();markDone(id);setPartial(id,part)};
   recog.onerror=ev=>{
     if(ev.error==='not-allowed'||ev.error==='service-not-allowed')toast('Permissão de microfone negada.');
     else if(ev.error==='network')toast('Ditado precisa de internet. Sem sinal, use o microfone do teclado.');
